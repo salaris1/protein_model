@@ -1,80 +1,69 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-
-
-datafolder = "/home/salaris/protein_model/data/"
-modelfolder = "/home/salaris/protein_model/models/"
-pickle_file_path = datafolder + "cas_data_512_v1/" #--> where to save the files 
-
-
-#%%
-
-import wandb
-import numpy as np
 import torch
 import torch.nn as nn
+import wandb
+import numpy as np
+import pandas as pd
 from datetime import datetime
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc_auc_score, matthews_corrcoef, balanced_accuracy_score
 from transformers import (
-    # AutoModelForTokenClassification,
     AutoModelForSequenceClassification,
     AutoTokenizer,
-    #No such thing as  DataCollatorForTokenClassification , Use default data collector
     DefaultDataCollator as DataCollatorForSequenceClassification,
     TrainingArguments,
     Trainer,
     BitsAndBytesConfig
 )
 from transformers import EsmForSequenceClassification
-
 from datasets import Dataset
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedType
 from peft import get_peft_config, PeftModel, PeftConfig, get_peft_model, LoraConfig, TaskType, prepare_model_for_kbit_training
 import pickle
-#%%
-# Initialize accelerator and Weights & Biases
+
+# Initialize accelerator
 accelerator = Accelerator()
 
-# os.environ["WANDB_DISABLED"] = "true"
+# Set the CUDA visible devices based on the accelerator
+if accelerator.distributed_type == DistributedType.MULTI_GPU:
+    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, range(accelerator.num_processes)))
+
 os.environ["WANDB_NOTEBOOK_NAME"] = 'CAS_new.py'
-wandb.init(project='CAS_classification') #disabling this 
-wandb.init(mode = 'disabled')
+wandb.init(project='CAS_classification')
 
+datafolder = "/home/salaris/protein_model/data/"
+modelfolder = "/home/salaris/protein_model/models/"
+pickle_file_path = datafolder + "cas_data_512_v1/"  # --> where to save the files 
 
-
-import transformers
-import logging
-
-
-
-#%%
-
-import pandas as pd 
-df = pd.read_csv(datafolder + "all_data_20240629_09.csvtrain_test.csv", sep = "\t",nrows=2000) 
+# Read and preprocess data
+df = pd.read_csv(datafolder + "all_data_20240629_09.csvtrain_test.csv", sep="\t", nrows=6000)
 df['class'] = df['class'].astype('category')
 df['class'] = df['class'].cat.codes
 
-#%%
-
 # Tokenization
-# modelname = "facebook/esm2_t30_150M_UR50D"
 modelname = "facebook/esm2_t6_8M_UR50D"
 modelname_str = modelname.split("/")[1]
 tokenizer = AutoTokenizer.from_pretrained(modelname)
 
-# Set max_sequence_length to the tokenizer's max input length
 max_sequence_length = 1024
 
 dataset = Dataset.from_pandas(df).train_test_split(test_size=0.2, shuffle=True)
-tokenizer = AutoTokenizer.from_pretrained(modelname)
+
+def print_trainable_parameters(model):
+    trainable_params = 0
+    all_param = 0
+    for _, param in model.named_parameters():
+        all_param += param.numel()
+        if param.requires_grad:
+            trainable_params += param.numel()
+    print(
+        f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
+    )
 
 def preprocess_data(examples, max_length=512):
-    #train_tokenized = tokenizer(train_sequences, padding=True, truncation=True, max_length=max_sequence_length, return_tensors="pt", is_split_into_words=False, add_special_tokens=False)
-
     text = examples["seq"]
-    encoding = tokenizer(text,padding = True ,  truncation=True, max_length=max_length, is_split_into_words=False, add_special_tokens=False, return_tensors="pt")
+    encoding = tokenizer(text, padding=True, truncation=True, max_length=max_length, is_split_into_words=False, add_special_tokens=False, return_tensors="pt")
     encoding["labels"] = examples["class"]
     return encoding
 
@@ -87,10 +76,33 @@ encoded_dataset = dataset.map(
 
 encoded_dataset.set_format("torch")
 
-
-#%%
-# Model Loading and Setup
+# Model Loading and Setup for QLoRA
 model = EsmForSequenceClassification.from_pretrained(modelname, num_labels=13)
+model = prepare_model_for_kbit_training(model)
+
+print_trainable_parameters(model)
+
+lora_config = LoraConfig(
+    task_type=TaskType.SEQ_CLS, 
+    r=8, 
+    lora_alpha=32, 
+    lora_dropout=0.1, 
+    target_modules=[
+        "query",
+        "key",
+        "value",
+        "EsmSelfOutput.dense",
+        "EsmIntermediate.dense",
+        "EsmOutput.dense",
+        "EsmContactPredictionHead.regression",
+        "EsmClassificationHead.dense",
+        "EsmClassificationHead.out_proj",
+    ]  # Modify as needed for your model
+)
+
+model = get_peft_model(model, lora_config)
+
+print_trainable_parameters(model)
 
 # Compute class weights due to class imbalance if necessary
 labels = np.array(encoded_dataset['train']['labels'])
@@ -150,6 +162,12 @@ trainer = CustomTrainer(
     eval_dataset=encoded_dataset['test'],
     tokenizer=tokenizer,
     compute_metrics=compute_metrics
+)
+
+# Prepare model, optimizer, and dataloaders for training with accelerator
+
+model, optimizer, train_dataloader, eval_dataloader = accelerator.prepare(
+    trainer.model, trainer.optimizer, trainer.get_train_dataloader(), trainer.get_eval_dataloader()
 )
 
 # Train the model
