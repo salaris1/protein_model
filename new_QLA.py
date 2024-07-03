@@ -25,6 +25,7 @@ import pickle
 # Set the number of epochs and batches as variables
 NUM_EPOCHS = 3
 NUM_BATCHES = 16
+DO_QUANTIZATION = True
 
 # Set the timestamp at the beginning of the script
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -83,15 +84,22 @@ encoded_dataset = dataset.map(
 
 encoded_dataset.set_format("torch")
 
-# Model Loading and Setup for QLoRA with Quantization
-quantization_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16
-)
+if DO_QUANTIZATION:
+    # Model Loading and Setup for QLoRA with Quantization
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16
+    )
 
-model = EsmForSequenceClassification.from_pretrained(modelname, num_labels=13, quantization_config=quantization_config)
+    model = EsmForSequenceClassification.from_pretrained(modelname, num_labels=13, quantization_config=quantization_config)
+else:
+    # Model Loading and Setup for QLoRA without Quantization
+    model = EsmForSequenceClassification.from_pretrained(modelname, num_labels=13)
+
+model.gradient_checkpointing_enable()
+
 model = prepare_model_for_kbit_training(model)
 
 print_trainable_parameters(model)

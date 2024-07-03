@@ -27,7 +27,7 @@ accelerator = Accelerator()
 
 # Set the CUDA visible devices based on the accelerator
 if accelerator.distributed_type == DistributedType.MULTI_GPU:
-    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, range(accelerator.num_processes)))
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4"
 
 os.environ["WANDB_NOTEBOOK_NAME"] = 'CAS_new.py'
 wandb.init(project='CAS_classification')

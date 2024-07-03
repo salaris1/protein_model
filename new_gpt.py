@@ -36,7 +36,7 @@ os.environ["WANDB_NOTEBOOK_NAME"] = 'CAS_new.py'
 wandb.init(project='CAS_classification')
 
 # Read and preprocess data
-df = pd.read_csv(datafolder + "all_data_20240629_09.csvtrain_test.csv", sep="\t")
+df = pd.read_csv(datafolder + "all_data_20240629_09.csvtrain_test.csv", sep="\t", nrows=6000)
 df['class'] = df['class'].astype('category')
 df['class'] = df['class'].cat.codes
 
@@ -104,6 +104,10 @@ lora_config = LoraConfig(
 )
 
 model = get_peft_model(model, lora_config)
+
+for name, param in model.named_parameters():
+    print(f"Parameter: {name}, Type: {param.dtype}")
+
 
 print_trainable_parameters(model)
 
