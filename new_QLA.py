@@ -51,6 +51,8 @@ df['class'] = df['class'].cat.codes
 
 # Tokenization
 modelname = "facebook/esm2_t33_650M_UR50D"
+# modelname = "facebook/esm2_t6_8M_UR50D"
+
 modelname_str = modelname.split("/")[1]
 tokenizer = AutoTokenizer.from_pretrained(modelname)
 
@@ -103,6 +105,9 @@ model.gradient_checkpointing_enable()
 model = prepare_model_for_kbit_training(model)
 
 print_trainable_parameters(model)
+for name, param in model.named_parameters():
+    if not param.is_floating_point():
+        param.data = param.data.float()
 
 lora_config = LoraConfig(
     task_type=TaskType.SEQ_CLS, 

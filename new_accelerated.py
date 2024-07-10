@@ -34,10 +34,11 @@ wandb.init(project='CAS_classification')
 
 datafolder = "/home/salaris/protein_model/data/"
 modelfolder = "/home/salaris/protein_model/models/"
+base_modelfolder = modelfolder + "base_model_accelerated/"
 pickle_file_path = datafolder + "cas_data_512_v1/"  # --> where to save the files 
 
 # Read and preprocess data
-df = pd.read_csv(datafolder + "all_data_20240629_09.csvtrain_test.csv", sep="\t", nrows=6000)
+df = pd.read_csv(datafolder + "all_data_20240704_14.csvtrain_test.csv", sep="\t", nrows=6000)
 df['class'] = df['class'].astype('category')
 df['class'] = df['class'].cat.codes
 
@@ -78,7 +79,11 @@ encoded_dataset.set_format("torch")
 
 # Model Loading and Setup for QLoRA
 model = EsmForSequenceClassification.from_pretrained(modelname, num_labels=13)
-model = prepare_model_for_kbit_training(model)
+model.save_pretrained(base_modelfolder)
+
+# model.gradient_checkpointing_enable()
+
+# model = prepare_model_for_kbit_training(model)
 
 print_trainable_parameters(model)
 
@@ -125,7 +130,7 @@ class CustomTrainer(Trainer):
 training_args = TrainingArguments(
     output_dir=modelfolder,
     overwrite_output_dir=True,
-    num_train_epochs=3,
+    num_train_epochs=9,
     per_device_train_batch_size=16,
     per_device_eval_batch_size=32,
     warmup_steps=500,
@@ -174,7 +179,7 @@ model, optimizer, train_dataloader, eval_dataloader = accelerator.prepare(
 trainer.train()
 
 # Save the fine-tuned model
-model_path = os.path.join(modelfolder, "esm_finetuned")
+model_path = os.path.join(modelfolder, "esm_finetuned_accelerated")
 model.save_pretrained(model_path)
 tokenizer.save_pretrained(model_path)
 

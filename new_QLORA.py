@@ -1,8 +1,8 @@
 """
-For this, we first need bitsandbytes>=0.43.0, accelerate>=0.28.0, transformers>4.38.2, trl>0.7.11 and peft>0.9.0. 
-We need to set fsdp_cpu_ram_efficient_loading=true, fsdp_use_orig_params=false and fsdp_offload_params=true(cpu offloading) 
-when using Accelerate config. When not using accelerate launcher, you can alternately 
-set the environment variable export FSDP_CPU_RAM_EFFICIENT_LOADING=true. Here, we will 
+For this, we first need bitsandbytes>=0.43.0, accelerate>=0.28.0, transformers>4.38.2, trl>0.7.11 and peft>0.9.0.
+We need to set fsdp_cpu_ram_efficient_loading=true, fsdp_use_orig_params=false and fsdp_offload_params=true(cpu offloading)
+when using Accelerate config. When not using accelerate launcher, you can alternately
+set the environment variable export FSDP_CPU_RAM_EFFICIENT_LOADING=true. Here, we will
 be using accelerate config and below is the config which can be
 https://huggingface.co/docs/peft/main/en/accelerate/fsdp#use-peft-qlora-and-fsdp-for-finetuning-large-models-on-multiple-gpus
 """
@@ -10,9 +10,15 @@ https://huggingface.co/docs/peft/main/en/accelerate/fsdp#use-peft-qlora-and-fsdp
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
+
+# datafolder = "/projects/fta_teams/roche/data/"
+# modelfolder = "/projects/fta_teams/roche/sam/code/protein_model/"
+# pickle_file_path = datafolder + "cas_data_512_v1/" #--> where to save the files
+NUM_EPOCHS = 5
+TRAINING_BATCH_SIZE = 32
 datafolder = "/home/salaris/protein_model/data/"
 modelfolder = "/home/salaris/protein_model/models/"
-pickle_file_path = datafolder + "cas_data_512_v1/" #--> where to save the files 
+pickle_file_path = datafolder + "cas_data_512_v1/" #--> where to save the files
 
 # Initialize Weights & Biases and other imports
 import wandb
@@ -88,15 +94,22 @@ encoded_dataset = dataset.map(
 encoded_dataset.set_format("torch")
 
 # Model Loading and Setup for QLoRA
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16
-)
+# bnb_config = BitsAndBytesConfig(
+#     load_in_8bit=True,
+#     # load_in_4bit=True,
+#     # bnb_4bit_use_double_quant=True,
+#     # bnb_4bit_quant_type="nf4",
+#     # bnb_4bit_compute_dtype=torch.bfloat16
+# )
 
-model = EsmForSequenceClassification.from_pretrained(modelname, num_labels=13, quantization_config=bnb_config)
-model.gradient_checkpointing_enable()
+from transformers import EetqConfig
+
+bnb_config = EetqConfig("int8")
+
+model = EsmForSequenceClassification.from_pretrained(modelname, num_labels=13, 
+                                                     quantization_config=bnb_config
+                                                     )
+# model.gradient_checkpointing_enable()
 
 model = prepare_model_for_kbit_training(model)
 
@@ -108,10 +121,10 @@ for name, param in model.named_parameters():
         param.data = param.data.float()
 
 lora_config = LoraConfig(
-    task_type=TaskType.SEQ_CLS, 
-    r=8, 
-    lora_alpha=32, 
-    lora_dropout=0.1, 
+    task_type=TaskType.SEQ_CLS,
+    r=8,
+    lora_alpha=32,
+    lora_dropout=0.1,
     target_modules=[
         "query",
         "key",
@@ -150,8 +163,8 @@ class CustomTrainer(Trainer):
 training_args = TrainingArguments(
     output_dir=modelfolder,
     overwrite_output_dir=True,
-    num_train_epochs=3,
-    per_device_train_batch_size=16,
+    num_train_epochs=NUM_EPOCHS,
+    per_device_train_batch_size=TRAINING_BATCH_SIZE,
     per_device_eval_batch_size=32,
     warmup_steps=500,
     weight_decay=0.01,
@@ -200,3 +213,16 @@ tokenizer.save_pretrained(model_path)
 # Optionally, evaluate the model on the test set
 results = trainer.evaluate()
 print(results)
+
+import csv
+
+data = results
+
+data['model_name'] = modelname
+data['batch_size_train'] = TRAINING_BATCH_SIZE  # replace with your actual batch size
+data['epochs'] = NUM_EPOCHS  # replace with your actual batch size
+
+with open('eval_results/results_QLORA_SS_ALEXIS.csv', 'w', newline='') as csvfile:
+    writer = csv.DictWriter(csvfile, fieldnames=data.keys())
+    writer.writeheader()
+    writer.writerow(data)
