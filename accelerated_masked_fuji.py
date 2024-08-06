@@ -23,6 +23,7 @@ from peft import get_peft_config, PeftModel, PeftConfig, get_peft_model, LoraCon
 import pickle
 from transformers import DataCollatorForLanguageModeling
 torch.cuda.empty_cache()
+import coolname 
 
 # Initialize accelerator
 accelerator = Accelerator()
@@ -32,20 +33,43 @@ if accelerator.distributed_type == DistributedType.MULTI_GPU:
     os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 
 os.environ["WANDB_NOTEBOOK_NAME"] = 'CAS_new.py'
-run = wandb.init(project='CAS_classification_MLM')
+os.environ["WANDB_MODE"]= 'offline'
 
-datafolder = "/home/salaris/protein_model/data/"
-modelfolder = "/home/salaris/protein_model/seq_models/"
+
+NUM_EPOCHS = 3
+NUM_BATCHES = 8
+
+
+root_folder = "/data/salaris1/protein_model/"
+root_folder = "/home/salaris/protein_model/"
+datafolder = root_folder + "data/"
+modelfolder = root_folder + "protein_model/seq_models/"
 # modelname = "facebook/esm2_t6_8M_UR50D"
-modelname = "facebook/esm2_t30_150M_UR50D"
-# modelname = "facebook/esm1b_t33_650M_UR50S"
+#modelname = "facebook/esm2_t30_150M_UR50D"
+#modelname = "facebook/esm1b_t33_650M_UR50S"
+modelname= root_folder + "seq_models/esm2_t30_150M_UR50D_base_model_accelerated"
 
-base_modelfolder = modelfolder + modelname.split("/")[-1] +"_base_model_accelerated/"
+
+
+run = wandb.init(project='CAS_classification_MLM')
+run_name  = run.name
+if run_name == '':
+    run_name = coolname.generate_slug(2)
+
+print("run.name: --> ", run.name)
+
+if root_folder in modelname:
+    base_modelfolder = modelname
+else:
+    base_modelfolder = modelfolder + modelname.split("/")[-1] +"_base_model_accelerated/"
+
 print("base_modelfolder: ", base_modelfolder)
+
+
 # Read and preprocess data
-df = pd.read_csv(datafolder + "all_data_20240704_14.csvtrain_test.csv", sep="\t",nrows=3000)
-#df['class'] = df['class'].astype('category')
-#df['class'] = df['class'].cat.codes
+df = pd.read_csv(datafolder + "all_data_20240704_14.csvtrain_test.csv", sep="\t",nrows = 6000)
+df['class'] = df['class'].astype('category')
+df['class'] = df['class'].cat.codes
 
 # Tokenization
 modelname_str = modelname.split("/")[-1]
@@ -66,7 +90,7 @@ def print_trainable_parameters(model):
         f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
     )
 
-def preprocess_data(examples, max_length=512):
+def preprocess_data(examples, max_length):
     text = examples["seq"]
     encoding = tokenizer(text, padding=True, truncation=True, max_length=max_length, is_split_into_words=False, add_special_tokens=False, return_tensors="pt")
     #encoding["labels"] = examples["class"]
@@ -77,6 +101,8 @@ encoded_dataset = dataset.map(
     batched=True,
     num_proc=os.cpu_count(),
     remove_columns=dataset["train"].column_names,
+    fn_kwargs={"max_length": max_sequence_length}
+
 )
 
 encoded_dataset.set_format("torch")
@@ -134,9 +160,9 @@ loss_fct = nn.CrossEntropyLoss(weight=class_weights.to(accelerator.device))
 training_args = TrainingArguments(
     output_dir=modelfolder,
     overwrite_output_dir=True,
-    num_train_epochs=15,
-    per_device_train_batch_size=6,
-    per_device_eval_batch_size=6,
+    num_train_epochs=NUM_EPOCHS,
+    per_device_train_batch_size=NUM_BATCHES,
+    per_device_eval_batch_size=NUM_BATCHES,
     warmup_steps=500,
     weight_decay=0.01,
     logging_dir='./logs',

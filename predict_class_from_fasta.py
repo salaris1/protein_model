@@ -19,8 +19,8 @@ def load_model(base_model_path, peft_model_path,only_raw_model = False):
         model.load_adapter(peft_model_path)
         # print('loading the finetuned model')
     else:
-        # model = EsmForSequenceClassification.from_pretrained(base_model_path, local_files_only=True)
-        model = EsmForSequenceClassification.from_pretrained("facebook/esm2_t6_8M_UR50D")
+        model = EsmForSequenceClassification.from_pretrained(base_model_path, local_files_only=True)
+        # model = EsmForSequenceClassification.from_pretrained("facebook/esm2_t6_8M_UR50D")
         # print('loading the raw model')
         
     model.eval()  # Set the model to evaluation mode
@@ -42,13 +42,18 @@ def extract_embeddings(model,tokenizer, seq_list, seq_length = 1024):
  
     last_hidden_states = outputs.last_hidden_state
     x = last_hidden_states.detach()
-    x= x.mean(axis=1)
-    return(x)
+    mask = inputs['attention_mask']
+    # mask = text != self.pad_token
+    denom = torch.sum(mask, -1, keepdim=True)
+    emb = torch.sum(x, dim=1) / denom.cuda()
+
+    # x= x.mean(axis=1)
+    return(emb)
 
 import gzip
 from Bio import SeqIO
 
-def create_fasta_iterator(fasta_file, chunk_size=1, info_filter = None):
+def create_fasta_iterator(fasta_file, chunk_size=1, info_filter = None, min_read_length = 200):
     seqs = []
     record_ids = []
     record_info = []
@@ -58,11 +63,12 @@ def create_fasta_iterator(fasta_file, chunk_size=1, info_filter = None):
 
         for record in SeqIO.parse(handle, "fasta"):
             # Filter out records that don't have the specified info
-            if info_filter is not None and info_filter not in record.description:
+            if (info_filter is not None and info_filter not in record.description) or len(record.seq) < min_read_length:
                 continue
-            seqs.append(str(record.seq))
-            record_ids.append(record.id)
-            record_info.append(record.description)
+            else:
+                seqs.append(str(record.seq))
+                record_ids.append(record.id)
+                record_info.append(record.description)
 
             if len(seqs) == chunk_size:
                 yield seqs, record_ids, record_info
@@ -79,8 +85,9 @@ def create_fasta_iterator(fasta_file, chunk_size=1, info_filter = None):
 
 import re
 import os
-
-def find_all_fasta_files(directory, regex="^mgy_proteins_.*\.fa\.gz$"):
+REGEX = "^mgy_proteins_.*\.fa\.gz$"
+REGEX = "^.*\.fasta\.gz$"
+def find_all_fasta_files(directory, regex=REGEX):
     compiled_regex = re.compile(regex)
     fasta_files = []
     
@@ -113,7 +120,8 @@ class XGBOOST_Classifier:
 peft_model_path = "/home/salaris/protein_model/seq_models/esm_finetuned_accelerated/jolly-capybara-19/"
 base_model_path = "/home/salaris/protein_model/seq_models/esm2_t30_150M_UR50D_base_model_accelerated/"
 xgboost_model_path = "/home/salaris/protein_model/xgboost_model/150M_xgboost_model.json"
-fasta_folder = "/home/salaris/protein_model/esm30_data/"
+# fasta_folder = "/home/salaris/protein_model/esm30_data/"
+fasta_folder = "/home/salaris/protein_model/data_binary/fasta/"
 
 def main():
     model, tokenizer = load_model(base_model_path, peft_model_path)
@@ -124,15 +132,16 @@ def main():
     stt = time.time()
     print("start time:",stt)
     for fasta_file in fasta_files:
-        prediction_df = pd.DataFrame(columns = ["record_id", "prediction", "info", "prediction_probability"])
+        prediction_df = pd.DataFrame(columns = ["record_id", "prediction", "info", "prediction_probability","sequence"])
         # embeddings, record_ids, record_info = extract_embeddings_from_fasta_file(fasta_file, model, tokenizer)
         n = 0 
-        for seqs, ids, info in create_fasta_iterator(fasta_file,chunk_size=250, info_filter="CR=1"):
+        for seqs, ids, info in create_fasta_iterator(fasta_file,chunk_size=250, info_filter=None, min_read_length=0):
             x = extract_embeddings(model,tokenizer, seqs, seq_length= 1024).cpu().numpy()
             
             predictions = xgb.predict(x)
             prediction_probabilities = xgb.predict_proba(x)
-            _df = {"record_id": ids, "prediction": predictions, "info": info, "prediction_probability": prediction_probabilities}
+            _df = {"record_id": ids, "prediction": predictions, "info": info, 
+                   "prediction_probability": prediction_probabilities, "sequence": seqs}
             _df = pd.DataFrame.from_dict(_df, orient='index').T
             _df = _df[_df.prediction == 0 ]
             if _df.shape[0]>0:
@@ -140,10 +149,11 @@ def main():
             # print(prediction_df.head())
             print("end time:" , time.time() - stt )
             n = n+ len(ids)
-            if n % 1000 == 0 :
+            if n % 100000 == 0 :
+                print(info[-1])
                 print(n)
-        pandas_File = fasta_file + "_predictions.csv"
-        prediction_df.to_csv(pandas_File)
+            pandas_File = fasta_file + "_predictions.csv"
+            prediction_df.to_csv(pandas_File)
         
 
 
