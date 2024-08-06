@@ -191,7 +191,10 @@ eval_dataloader = DataLoader(encoded_dataset['test'], batch_size=training_args.p
 optimizer = torch.optim.AdamW(model.parameters(), lr=training_args.learning_rate)
 
 # Re-initialize the Accelerator
-accelerator = Accelerator()
+accelerator = Accelerator(device_placement=True)
+
+print(f"Available GPUs: {torch.cuda.device_count()}")
+
 
 # Prepare model, optimizer, and dataloaders for training with accelerator
 model, optimizer, train_dataloader, eval_dataloader = accelerator.prepare(

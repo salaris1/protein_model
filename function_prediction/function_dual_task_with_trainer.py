@@ -19,7 +19,7 @@ NUM_EPOCHS = 5
 NUM_BATCHES = 8*1
 EMB_FEATURES = 384  # Embedding counts
 
-log_sigma_mlm = nn.Parameter(torch.tensor(1.0))
+log_sigma_mlm = nn.Parameter(torch.tensor(0.0))
 log_sigma_regression = nn.Parameter(torch.tensor(100.0))
 
 
